@@ -1,0 +1,54 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+*.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# API keys and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Local development settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.bak
+
+# Log files
+*.log
+logs/
+
+# Test audio files
+*.wav
+*.mp3
+*.m4a
+*.ogg
+
+# Azure Speech Service specific
+*.wav.json  # If you're saving recognition results alongside audio files
