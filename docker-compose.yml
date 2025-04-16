@@ -1,0 +1,16 @@
+version: '3.9'
+services:
+  backend:
+    build:
+      context: ./backend/speechtotext
+    ports:
+      - "8000:8000"
+    env_file: .env
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./meeting-assistant-frontend
+    ports:
+      - "5173:5173"
+    restart: unless-stopped
