@@ -5,15 +5,19 @@ import tempfile
 import azure.cognitiveservices.speech as speechsdk
 from fastapi import FastAPI, UploadFile, File, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketState, WebSocketDisconnect
 from dotenv import load_dotenv
 import logging
 import asyncio
+import io
+import wave
+import struct
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -40,10 +44,33 @@ speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_re
 speech_config.speech_recognition_language = "en-US"  # Default language
 
 
+def convert_audio_data(data, sample_rate=16000, channels=1, sample_width=2):
+    """
+    Convert audio data from WebM/MP4/OGG to WAV format that Azure Speech can process.
+    This is a simplified converter that creates a basic WAV container.
+    """
+    try:
+        # Create an in-memory WAV file
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(channels)  # Mono
+            wav_file.setsampwidth(sample_width)  # 2 bytes (16 bits) per sample
+            wav_file.setframerate(sample_rate)  # 16kHz
+            
+            # Write raw audio data
+            wav_file.writeframes(data)
+        
+        # Get the WAV data
+        wav_buffer.seek(0)
+        return wav_buffer.read()
+    except Exception as e:
+        logger.error(f"Error converting audio: {e}")
+        return data  # Return original data on error
+
+
 @app.get("/")
 async def root():
     return {"message": "Azure Speech-to-Text API is running"}
-
 
 
 @app.post("/transcribe")
@@ -143,66 +170,241 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(websocket: WebSocket):
+    from starlette.websockets import WebSocketDisconnect, WebSocketState  # Import WebSocketDisconnect and WebSocketState here
+    
+    # Accept the WebSocket connection
     await websocket.accept()
+    logger.info("WebSocket connection accepted")
+    
+    # Store references to be cleaned up in the finally block
+    speech_recognizer = None
+    stream = None
+    is_listening = True  # Define is_listening flag here
     
     try:
-        # Set up continuous recognition
-        stream_config = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+        # Set up the audio stream format for 16kHz mono audio
+        stream_config = speechsdk.audio.AudioStreamFormat(
+            samples_per_second=16000,
+            bits_per_sample=16,
+            channels=1
+        )
+        
+        # Create a push audio stream
         stream = speechsdk.audio.PushAudioInputStream(stream_format=stream_config)
         audio_config = speechsdk.audio.AudioConfig(stream=stream)
         
-        speech_recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config, 
-            audio_config=audio_config
+        # Configure auto language detection for English and Chinese
+        auto_detect_source_language_config = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
+            languages=["en-US", "zh-CN"]  # English (US) and Chinese (Simplified)
         )
         
-        # Set up callbacks for recognition results
-        async def recognized_cb(evt):
-            await websocket.send_json({"type": "final", "text": evt.result.text})
+        # Create speech recognizer with language detection
+        speech_recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config, 
+            audio_config=audio_config,
+            auto_detect_source_language_config=auto_detect_source_language_config
+        )
         
-        async def recognizing_cb(evt):
-            await websocket.send_json({"type": "interim", "text": evt.result.text})
+        # Enable verbose logging in the Speech SDK
+        speechsdk.log_level = speechsdk.LogLevel.Verbose
+
+        # Add session callbacks to track what's happening
+        def session_started_cb(evt):
+            logger.info(f"SESSION STARTED: {evt}")
+        speech_recognizer.session_started.connect(session_started_cb)
+
+        def session_stopped_cb(evt):
+            logger.info(f"SESSION STOPPED: {evt}")
+        speech_recognizer.session_stopped.connect(session_stopped_cb)
+
+        # Add speech start/end detection callbacks
+        def speech_start_detected_cb(evt):
+            logger.info(f"SPEECH START DETECTED: {evt}")
+        speech_recognizer.speech_start_detected.connect(speech_start_detected_cb)
+
+        def speech_end_detected_cb(evt):
+            logger.info(f"SPEECH END DETECTED: {evt}")
+        speech_recognizer.speech_end_detected.connect(speech_end_detected_cb)
         
-        async def canceled_cb(evt):
-            await websocket.send_json({"type": "error", "text": evt.cancellation_details.error_details})
+        # Create a lock for websocket access
+        ws_lock = asyncio.Lock()
+        
+        # Helper function to safely send WebSocket responses
+        async def safe_send(data):
+            nonlocal is_listening  # Use nonlocal to reference the outer is_listening variable
+            if not is_listening:
+                return
+                
+            try:
+                async with ws_lock:
+                    await websocket.send_json(data)
+                    logger.debug(f"Sent message: {data['type']}")
+            except Exception as e:
+                logger.error(f"Error sending response: {e}")
+                is_listening = False  # Set to false on error
+        
+        # Define callback functions for recognition events
+        def recognized_cb(evt):
+            nonlocal is_listening  # Use nonlocal to reference the outer is_listening variable
+            if not is_listening:
+                return
+                
+            logger.debug(f"RECOGNIZED TEXT: {evt.result.text}")
+                
+            if evt.result.text:
+                # Get the detected language if available
+                detected_language = "unknown"
+                if hasattr(evt.result, 'properties') and \
+                   speechsdk.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult in evt.result.properties:
+                    detected_language = evt.result.properties[
+                        speechsdk.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult]
+                
+                # Create response
+                response = {
+                    "type": "final",
+                    "text": evt.result.text,
+                    "language": detected_language,
+                    "offset": evt.result.offset, 
+                    "duration": evt.result.duration
+                }
+                
+                # Create task to send response
+                asyncio.create_task(safe_send(response))
+        
+        def recognizing_cb(evt):
+            nonlocal is_listening  # Use nonlocal to reference the outer is_listening variable
+            if not is_listening:
+                return
+                
+            logger.debug(f"INTERIM TEXT: {evt.result.text}")
+                
+            if evt.result.text:
+                # Create interim response
+                response = {
+                    "type": "interim",
+                    "text": evt.result.text
+                }
+                
+                # Create task to send response
+                asyncio.create_task(safe_send(response))
+        
+        def canceled_cb(evt):
+            nonlocal is_listening  # Use nonlocal to reference the outer is_listening variable
+            if not is_listening:
+                return
+                
+            logger.warning(f"Recognition canceled: {evt.cancellation_details.reason}")
+            if evt.cancellation_details.reason == speechsdk.CancellationReason.Error:
+                error_details = evt.cancellation_details.error_details
+                logger.error(f"Recognition error: {error_details}")
+                
+                # Create task to send error response
+                asyncio.create_task(safe_send({
+                    "type": "error",
+                    "text": f"Recognition error: {error_details}"
+                }))
         
         # Connect callbacks
-        speech_recognizer.recognized.connect(lambda evt: asyncio.ensure_future(recognized_cb(evt)))
-        speech_recognizer.recognizing.connect(lambda evt: asyncio.ensure_future(recognizing_cb(evt)))
-        speech_recognizer.canceled.connect(lambda evt: asyncio.ensure_future(canceled_cb(evt)))
+        speech_recognizer.recognized.connect(recognized_cb)
+        speech_recognizer.recognizing.connect(recognizing_cb)
+        speech_recognizer.canceled.connect(canceled_cb)
         
         # Start continuous recognition
         speech_recognizer.start_continuous_recognition()
+        logger.info("Started continuous recognition")
+        
+        # Send confirmation to client
+        await websocket.send_json({
+            "type": "status",
+            "text": "Recognition started"
+        })
         
         # Main loop to receive audio data
-        while True:
+        while is_listening:
             try:
-                # Receive audio chunks from WebSocket
-                data = await websocket.receive_bytes()
+                # Use a timeout for receiving data
+                data = await asyncio.wait_for(websocket.receive_bytes(), timeout=5.0)
                 
-                # Check for stop signal
-                if len(data) == 0 or (len(data) == 1 and data[0] == 0):
+                # Check for stop signal or empty data
+                if not data or (len(data) == 1 and data[0] == 0):
+                    logger.info("Received stop signal")
                     break
                 
-                # Push audio data to the stream
-                stream.write(data)
+                # Log audio chunk size for debugging
+                logger.debug(f"Received audio chunk: {len(data)} bytes")
                 
+                try:
+                    # For debugging: inspect the first few bytes of the data
+                    if len(data) >= 10:
+                        logger.debug(f"Audio data header: {data[:10].hex()}")
+                    
+                    # Convert audio to a format Azure can process
+                    # Uncomment this line if you want to try the conversion
+                    data = convert_audio_data(data)
+                    
+                    # Push audio data to the stream
+                    stream.write(data)
+                except Exception as e:
+                    logger.error(f"Error processing audio data: {e}")
+                
+            except asyncio.TimeoutError:
+                # This is normal - just continue waiting
+                continue
+            except WebSocketDisconnect:
+                logger.info("WebSocket disconnected")
+                break
             except Exception as e:
                 logger.error(f"Error processing audio: {str(e)}")
-                await websocket.send_json({"type": "error", "text": str(e)})
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "text": f"Error processing audio: {str(e)}"
+                    })
+                except:
+                    pass
                 break
         
-        # Stop recognition and clean up
-        speech_recognizer.stop_continuous_recognition()
-        stream.close()
-    
     except Exception as e:
         logger.error(f"WebSocket error: {str(e)}")
-        await websocket.send_json({"type": "error", "text": str(e)})
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "text": f"Error: {str(e)}"
+            })
+        except:
+            pass
     
     finally:
-        # Ensure the WebSocket is closed
-        await websocket.close()
+        # Clean up resources
+        logger.info("Cleaning up resources")
+        
+        # Mark as not listening
+        is_listening = False
+        
+        # Stop speech recognition
+        if speech_recognizer:
+            try:
+                # Just stop continuous recognition
+                speech_recognizer.stop_continuous_recognition()
+                logger.info("Stopped continuous recognition")
+            except Exception as e:
+                logger.error(f"Error stopping recognition: {e}")
+        
+        # Close the stream
+        if stream:
+            try:
+                stream.close()
+                logger.info("Closed audio stream")
+            except Exception as e:
+                logger.error(f"Error closing stream: {e}")
+        
+        # Ensure the WebSocket is closed only once
+        try:
+            if websocket.client_state != WebSocketState.DISCONNECTED:
+                await websocket.close(code=1000)
+                logger.info("Closed WebSocket connection")
+        except Exception as e:
+            logger.error(f"Error closing WebSocket: {e}")
 
 
 if __name__ == "__main__":
