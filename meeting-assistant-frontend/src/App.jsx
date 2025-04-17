@@ -1,6 +1,7 @@
 import { useState } from "react";
 import AudioTranscription from "./components/AudioTranscription";
 import ImprovedLiveTranscription from "./components/ImprovedLiveTranscription";
+import './index.css'
 
 function App() {
     const [transcript, setTranscript] = useState(
@@ -16,7 +17,7 @@ function App() {
     const handleTranscriptUpdate = (newTranscript) => {
         console.log("App received transcript update:", newTranscript);
         setTranscript(newTranscript);
-        
+
         // Here you would typically also update the summary
         // Either by calling another API or using a client-side processing function
     };
@@ -33,30 +34,30 @@ function App() {
     return (
         <div className="p-8 space-y-8 font-sans bg-gray-50 min-h-screen">
             <header className="text-3xl font-bold text-center text-blue-800">🧠 会议助手 - Agent 驱动</header>
-            
+
             {/* Transcription Tabs */}
             <div className="flex space-x-4 mb-4">
-                <button 
+                <button
                     className={`px-4 py-2 rounded-t-lg ${activeTab === "upload" ? "bg-white shadow-sm border-t border-l border-r" : "bg-gray-200"}`}
                     onClick={() => setActiveTab("upload")}
                 >
                     上传音频转写
                 </button>
-                <button 
+                <button
                     className={`px-4 py-2 rounded-t-lg ${activeTab === "live" ? "bg-white shadow-sm border-t border-l border-r" : "bg-gray-200"}`}
                     onClick={() => setActiveTab("live")}
                 >
                     实时语音转写
                 </button>
             </div>
-            
+
             {/* Conditional Rendering of Components */}
             {activeTab === "upload" ? (
                 <AudioTranscription />
             ) : (
                 <ImprovedLiveTranscription onTranscriptUpdate={handleTranscriptUpdate} />
             )}
-            
+
             <div className="grid md:grid-cols-2 gap-8">
                 <section className="bg-white p-6 rounded-lg shadow-md">
                     <h2 className="text-xl font-semibold mb-4 text-gray-800">📡 转写内容</h2>
@@ -83,3 +84,5 @@ function App() {
 }
 
 export default App;
+
+
