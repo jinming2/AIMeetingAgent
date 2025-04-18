@@ -16,8 +16,8 @@ import struct
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
+# Configure logging - reduced to INFO level
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -147,7 +147,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         
         # Wait for recognition to complete
         while not done:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         
         # Stop recognition
         speech_recognizer.stop_continuous_recognition()
@@ -171,7 +171,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(websocket: WebSocket):
     from starlette.websockets import WebSocketDisconnect, WebSocketState
-    import threading
     import queue
     
     # Accept the WebSocket connection
@@ -193,16 +192,14 @@ async def websocket_transcribe(websocket: WebSocket):
                 # Check if there are messages to send
                 if not message_queue.empty():
                     message = message_queue.get_nowait()
-                    logger.info(f"Sending message from queue: {message}")
                     
                     if websocket.client_state != WebSocketState.DISCONNECTED:
                         await websocket.send_json(message)
-                        logger.info(f"Message sent: {message['type']}")
                     
                     message_queue.task_done()
                 
                 # Give other tasks a chance to run
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
             except Exception as e:
                 logger.error(f"Error processing message queue: {e}")
                 await asyncio.sleep(0.5)
@@ -239,8 +236,6 @@ async def websocket_transcribe(websocket: WebSocket):
             if not is_listening:
                 return
                 
-            logger.info(f"RECOGNIZED TEXT CALLBACK: {evt.result.text}")
-                
             if evt.result.text:
                 # Get the detected language if available
                 detected_language = "unknown"
@@ -257,13 +252,10 @@ async def websocket_transcribe(websocket: WebSocket):
                     "offset": evt.result.offset, 
                     "duration": evt.result.duration
                 })
-                logger.info(f"Added FINAL message to queue: {evt.result.text}")
         
         def recognizing_cb(evt):
             if not is_listening:
                 return
-                
-            logger.info(f"INTERIM TEXT CALLBACK: {evt.result.text}")
                 
             if evt.result.text:
                 # Add message to queue
@@ -271,7 +263,6 @@ async def websocket_transcribe(websocket: WebSocket):
                     "type": "interim",
                     "text": evt.result.text
                 })
-                logger.info(f"Added INTERIM message to queue: {evt.result.text}")
         
         def canceled_cb(evt):
             if not is_listening:
@@ -287,7 +278,6 @@ async def websocket_transcribe(websocket: WebSocket):
                     "type": "error",
                     "text": f"Recognition error: {error_details}"
                 })
-                logger.info(f"Added ERROR message to queue")
         
         # Connect callbacks
         speech_recognizer.recognized.connect(recognized_cb)
@@ -296,23 +286,12 @@ async def websocket_transcribe(websocket: WebSocket):
         
         # Start continuous recognition
         speech_recognizer.start_continuous_recognition()
-        logger.info("Started continuous recognition")
         
         # Send confirmation to client
         await websocket.send_json({
             "type": "status",
             "text": "Recognition started"
         })
-        
-        # Send a test message
-        await websocket.send_json({
-            "type": "final",
-            "text": "This is a test transcription message.",
-            "language": "en-US",
-            "offset": 0,
-            "duration": 0
-        })
-        logger.info("Sent test transcription message")
         
         # Main loop to receive audio data
         while is_listening:
@@ -325,16 +304,9 @@ async def websocket_transcribe(websocket: WebSocket):
                     logger.info("Received stop signal")
                     break
                 
-                # Log audio chunk size for debugging
-                logger.debug(f"Received audio chunk: {len(data)} bytes")
-                
                 try:
-                    # For debugging: inspect the first few bytes of the data
-                    if len(data) >= 10:
-                        logger.debug(f"Audio data header: {data[:10].hex()}")
-                    
                     # Convert audio to a format Azure can process
-                    data = convert_audio_data(data)
+                    # data = convert_audio_data(data)
                     
                     # Push audio data to the stream
                     stream.write(data)
@@ -383,7 +355,6 @@ async def websocket_transcribe(websocket: WebSocket):
         if speech_recognizer:
             try:
                 speech_recognizer.stop_continuous_recognition()
-                logger.info("Stopped continuous recognition")
             except Exception as e:
                 logger.error(f"Error stopping recognition: {e}")
         
@@ -391,7 +362,6 @@ async def websocket_transcribe(websocket: WebSocket):
         if stream:
             try:
                 stream.close()
-                logger.info("Closed audio stream")
             except Exception as e:
                 logger.error(f"Error closing stream: {e}")
         
@@ -399,12 +369,10 @@ async def websocket_transcribe(websocket: WebSocket):
         try:
             if websocket.client_state != WebSocketState.DISCONNECTED:
                 await websocket.close(code=1000)
-                logger.info("Closed WebSocket connection")
         except Exception as e:
             logger.error(f"Error closing WebSocket: {e}")
 
 if __name__ == "__main__":
     import uvicorn
-    import asyncio
     
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

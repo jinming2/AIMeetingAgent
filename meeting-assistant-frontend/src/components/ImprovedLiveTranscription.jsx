@@ -3,44 +3,48 @@ import { useState, useEffect, useRef } from 'react';
 function ImprovedLiveTranscription({ onTranscriptUpdate }) {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const [interimText, setInterimText] = useState(''); // Add state for interim results
+  const [interimText, setInterimText] = useState('');
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('idle');
-  const [messageLog, setMessageLog] = useState([]); // For debugging
+  const [messageLog, setMessageLog] = useState([]);
+  
+  
+  // Add state for AudioWorklet support detection
+  const [supportsAudioWorklet, setSupportsAudioWorklet] = useState(true);
   
   const websocketRef = useRef(null);
   const audioContextRef = useRef(null);
   const streamRef = useRef(null);
-  const processorRef = useRef(null);
+  const workletNodeRef = useRef(null);
   
   // Function to start recording
   const startRecording = async () => {
     try {
       setError(null);
       setStatus('connecting');
-      setTranscript(''); // Clear transcript on new recording session
-      setInterimText(''); // Clear interim text
-      setMessageLog([]); // Clear message log
+      setTranscript('');
+      setInterimText('');
+      setMessageLog([]);
       
-      // Request microphone access
+      // Request microphone access with specific constraints for quality
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 16000
+          sampleRate: 16000,
+          channelCount: 1
         } 
       });
       streamRef.current = stream;
       
-      // Use a specific URL format to ensure it's correct
+      // Connect to WebSocket
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsBaseUrl = window.location.hostname === 'localhost' ? 'localhost:8000' : window.location.host;
       const wsUrl = `${wsProtocol}//${wsBaseUrl}/ws/transcribe`;
       
       console.log(`Connecting to WebSocket at: ${wsUrl}`);
       
-      // Create a WebSocket connection
       const websocket = new WebSocket(wsUrl);
       websocketRef.current = websocket;
       
@@ -50,15 +54,13 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
         setIsRecording(true);
         
         // Create AudioContext and connect the stream
-        setupAudioProcessing(stream, websocket);
+        setupModernAudioProcessing(stream, websocket);
       };
       
       // Handle WebSocket messages (transcription results)
       websocket.onmessage = (event) => {
         try {
-          console.log("Raw WebSocket message:", event.data);
           const data = JSON.parse(event.data);
-          console.log("Parsed WebSocket message:", data);
           
           // Add to message log for debugging
           setMessageLog(prev => [...prev, `${new Date().toISOString().split('T')[1].split('.')[0]} - ${data.type}: ${data.text || JSON.stringify(data)}`]);
@@ -74,15 +76,12 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
               break;
               
             case 'final':
-              console.log('Final transcription received:', data.text);
-              
               if (data.text && data.text.trim()) {
                 setInterimText(''); // Clear interim text
                 
                 setTranscript(current => {
                   // For final results, append to the existing transcript
                   const updatedTranscript = current ? `${current}\n${data.text}` : data.text;
-                  console.log('Updated transcript:', updatedTranscript);
                   
                   // Pass the updated transcript to parent component
                   if (onTranscriptUpdate) {
@@ -95,8 +94,6 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
               break;
               
             case 'interim':
-              console.log('Interim transcription received:', data.text);
-              
               if (data.text && data.text.trim()) {
                 setInterimText(data.text);
               }
@@ -135,22 +132,106 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
     }
   };
   
-  // Configure audio processing to send raw PCM data
-  const setupAudioProcessing = (stream, websocket) => {
+  // Modern setup using AudioWorklet
+  // Modern setup using AudioWorklet
+  const setupModernAudioProcessing = async (stream, websocket) => {
     try {
-      // Create new AudioContext with 16kHz sample rate
+      // Create AudioContext with 16kHz sample rate
       const audioContext = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 16000 // Force 16kHz sample rate for Azure compatibility
+        sampleRate: 16000
+      });
+      audioContextRef.current = audioContext;
+      
+      // Load AudioWorklet module
+      try {
+        await audioContext.audioWorklet.addModule('audio-processor.js');
+        setSupportsAudioWorklet(true);
+      } catch (err) {
+        console.warn('AudioWorklet not supported, falling back to ScriptProcessor:', err);
+        setSupportsAudioWorklet(false);
+        // Fall back to legacy processing
+        setupLegacyAudioProcessing(stream, websocket, audioContext);
+        return;
+      }
+      
+      // Create audio source from microphone stream
+      const source = audioContext.createMediaStreamSource(stream);
+      
+      // Create AudioWorklet node
+      const workletNode = new AudioWorkletNode(audioContext, 'transcription-processor');
+      workletNodeRef.current = workletNode;
+      
+      // Configure the AudioWorklet
+      workletNode.port.postMessage({ 
+        type: 'config',
+        bufferSize: 2048,
+        silenceThreshold: 0.01
+      });
+      
+      // Handle messages from AudioWorklet
+      workletNode.port.onmessage = (event) => {
+        if (event.data.type === 'audio') {
+          // Only send data if there's speech or we've been silent too long
+          if (event.data.hasSpeech || true) { // Always send data for now, can be optimized
+            if (websocket.readyState === WebSocket.OPEN) {
+              websocket.send(event.data.data);
+            }
+          }
+        }
+      };
+      
+      // Connect audio nodes: source -> worklet
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
+      
+      console.log('Modern audio processing initialized with AudioWorklet');
+    } catch (err) {
+      console.error('Error setting up modern audio processing:', err);
+      setError(`Error setting up audio: ${err.message}`);
+      
+      // Fall back to legacy processing if modern setup fails
+      setupLegacyAudioProcessing(stream, websocket);
+    }
+  };
+  
+  // Legacy fallback using ScriptProcessor (for browsers without AudioWorklet)
+  const setupLegacyAudioProcessing = (stream, websocket, existingContext = null) => {
+    try {
+      // Use existing context or create a new one
+      const audioContext = existingContext || new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 16000
       });
       audioContextRef.current = audioContext;
       
       // Create source node from microphone stream
       const source = audioContext.createMediaStreamSource(stream);
       
+      // Create analyzer for visualization
+      const analyzer = audioContext.createAnalyser();
+      analyzer.fftSize = 256;
+      const bufferLength = analyzer.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      // Set up visualization
+      const updateVisualization = () => {
+        if (!isRecording) return;
+        
+        analyzer.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
+        const level = average / 256; // Normalize to 0-1
+        
+        
+        requestAnimationFrame(updateVisualization);
+      };
+      updateVisualization();
+      
       // Create script processor node for raw PCM access
       const bufferSize = 2048;
       const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-      processorRef.current = processor;
       
       // Process audio data
       processor.onaudioprocess = (e) => {
@@ -159,53 +240,47 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
             // Get PCM data from input channel
             const inputData = e.inputBuffer.getChannelData(0);
             
-            // Convert Float32Array to Int16Array for Azure
-            const pcmData = convertFloatTo16BitPCM(inputData);
+            // Convert Float32Array to Int16Array
+            const int16Array = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+              const s = Math.max(-1, Math.min(1, inputData[i]));
+              int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
             
             // Send the data to the server
-            websocket.send(pcmData.buffer);
-            
-            // Log for debugging
-            console.log(`Sent audio chunk: ${pcmData.byteLength} bytes`);
+            websocket.send(int16Array.buffer);
           } catch (err) {
             console.error('Error sending audio data:', err);
           }
         }
       };
       
-      // Connect nodes: source -> processor -> destination (silent)
-      source.connect(processor);
+      // Connect nodes: source -> analyzer -> processor -> destination
+      source.connect(analyzer);
+      analyzer.connect(processor);
       processor.connect(audioContext.destination);
       
-      console.log('Audio processing initialized');
+      console.log('Legacy audio processing initialized with ScriptProcessor');
     } catch (err) {
-      console.error('Error setting up audio processing:', err);
+      console.error('Error setting up legacy audio processing:', err);
       setError(`Error setting up audio: ${err.message}`);
     }
-  };
-
-  // Convert Float32Array from AudioBuffer to Int16Array for Azure
-  const convertFloatTo16BitPCM = (float32Array) => {
-    const int16Array = new Int16Array(float32Array.length);
-    for (let i = 0; i < float32Array.length; i++) {
-      // Convert float [-1.0, 1.0] to int16 [-32768, 32767]
-      // Clamp the value to avoid overflow
-      const s = Math.max(-1, Math.min(1, float32Array[i]));
-      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return int16Array;
   };
   
   // Function to stop recording
   const stopRecording = () => {
-    // Stop the processor and audio context
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
+    // Stop any AudioWorklet node
+    if (workletNodeRef.current) {
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
     }
     
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(e => console.error('Error closing AudioContext:', e));
+    // Close the AudioContext
+    if (audioContextRef.current) {
+      if (audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(e => console.error('Error closing AudioContext:', e));
+      }
+      audioContextRef.current = null;
     }
     
     // Stop the microphone stream
@@ -221,7 +296,8 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
     
     setIsRecording(false);
     setStatus('idle');
-    setInterimText(''); // Clear interim text
+    setInterimText('');
+    
   };
   
   // Clean up on component unmount
@@ -265,7 +341,9 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
         )}
         
         <span className="ml-4 text-sm font-medium">
-          状态: <span className={status === 'error' ? 'text-red-600' : 'text-blue-600'}>{getStatusText()}</span>
+          状态: <span className={status === 'error' ? 'text-red-600' : 'text-blue-600'}>
+            {getStatusText()} {!supportsAudioWorklet && isRecording ? "(使用兼容模式)" : ""}
+          </span>
         </span>
       </div>
       
@@ -289,9 +367,7 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
             </div>
           )}
           
-          <div className="w-full bg-gray-200 h-4 rounded-full overflow-hidden mt-2">
-            <div className="audio-meter"></div>
-          </div>
+          
         </div>
       )}
       
@@ -315,6 +391,7 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
           <div className="mt-2 bg-gray-50 p-3 rounded text-xs font-mono overflow-x-auto">
             <p>WebSocket 状态: {websocketRef.current ? websocketRef.current.readyState : 'null'}</p>
             <p>录音状态: {isRecording ? '录音中' : '已停止'}</p>
+            <p>使用 AudioWorklet: {supportsAudioWorklet ? '是' : '否 (使用 ScriptProcessor 兼容模式)'}</p>
             <p>消息接收日志:</p>
             <ul className="mt-1 space-y-1">
               {messageLog.map((msg, idx) => (
