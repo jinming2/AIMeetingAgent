@@ -11,6 +11,13 @@ import asyncio
 import openai
 from fastapi import Form
 
+# Summary agent 引入
+from app.summary_agent import build_structured_summary_graph, MeetingState
+
+summary_graph = build_structured_summary_graph()
+# 初始化全局 state，用于累计 memory
+summary_state: MeetingState = {"transcript": "", "structured": None, "memory": ""}
+
 # Load environment variables
 load_dotenv()
 
@@ -33,6 +40,7 @@ app.add_middleware(
 # Azure Speech configuration
 speech_key = os.getenv("AZURE_SPEECH_KEY")
 speech_region = os.getenv("AZURE_SPEECH_REGION")
+
 
 if not speech_key or not speech_region:
     logger.error("Azure Speech credentials not found in environment variables")
@@ -168,6 +176,23 @@ async def websocket_transcribe(websocket: WebSocket):
             speech_config=speech_config, audio_config=audio_config
         )
 
+        # 异步处理识别结果并同时生成摘要
+        async def handle_final(evt):
+            text = evt.result.text
+            # 推送转写结果
+            await websocket.send_json({"type": "final", "text": text})
+            # 更新 memory 并生成新摘要
+            input_state = {
+                "transcript": text,
+                "structured": None,
+                "memory": summary_state["memory"],
+            }
+            new_state = summary_graph(input_state)
+            summary_state.update(new_state)
+            await websocket.send_json(
+                {"structured_summary": summary_state["structured"]}
+            )
+
         # Set up callbacks for recognition results
         async def recognized_cb(evt):
             await websocket.send_json({"type": "final", "text": evt.result.text})
@@ -189,6 +214,9 @@ async def websocket_transcribe(websocket: WebSocket):
         )
         speech_recognizer.canceled.connect(
             lambda evt: asyncio.ensure_future(canceled_cb(evt))
+        )
+        speech_recognizer.recognized.connect(
+            lambda evt: asyncio.ensure_future(handle_final(evt))
         )
 
         # Start continuous recognition
@@ -225,32 +253,32 @@ async def websocket_transcribe(websocket: WebSocket):
         await websocket.close()
 
 
-@app.post("/summarize")
-async def summarize(text: str = Form(...)):
-    openai.api_key = os.getenv("OPENAI_API_KEY")
+# @app.post("/summarize")
+# async def summarize(text: str = Form(...)):
+#     openai.api_key = os.getenv("OPENAI_API_KEY")
 
-    if not openai.api_key:
-        raise HTTPException(status_code=500, detail="Missing OpenAI API key")
+#     if not openai.api_key:
+#         raise HTTPException(status_code=500, detail="Missing OpenAI API key")
 
-    prompt = f"""
-你是一个会议助手，请根据以下会议内容提取结构化摘要：
+#     prompt = f"""
+# 你是一个会议助手，请根据以下会议内容提取结构化摘要：
 
-{text}
+# {text}
 
-请输出：
-- 会议议题：
-- 关键观点：
-- Action Items（任务、负责人、截止时间）：
-"""
+# 请输出：
+# - 会议议题：
+# - 关键观点：
+# - Action Items（任务、负责人、截止时间）：
+# """
 
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
-        )
-        result = response.choices[0].message["content"]
-        return {"summary": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+#     try:
+#         response = openai.ChatCompletion.create(
+#             model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
+#         )
+#         result = response.choices[0].message["content"]
+#         return {"summary": result}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

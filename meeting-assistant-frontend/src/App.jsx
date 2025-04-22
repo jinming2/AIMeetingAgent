@@ -55,7 +55,11 @@ function App() {
             {activeTab === "upload" ? (
                 <AudioTranscription />
             ) : (
-                <ImprovedLiveTranscription onTranscriptUpdate={handleTranscriptUpdate} />
+                <ImprovedLiveTranscription
+                    onTranscriptUpdate={handleTranscriptUpdate}
+                    onSummaryUpdate={(newSummary) => setSummary(newSummary)}
+                />
+
             )}
 
             <div className="grid md:grid-cols-2 gap-8">
