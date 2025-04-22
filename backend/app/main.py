@@ -373,6 +373,56 @@ async def websocket_transcribe(websocket: WebSocket):
         except Exception as e:
             logger.error(f"Error closing WebSocket: {e}")
 
+@app.post("/correct-text")
+async def correct_text_endpoint(text: str = Form(...)):
+    """
+    Correct transcribed text using OpenAI API with conservative approach
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing OpenAI API key")
+
+    from openai import OpenAI
+    
+    client = OpenAI(api_key=api_key)
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": """You are an AI assistant specialized in correcting speech-to-text transcription errors while preserving meaning and context.
+
+Your task is to fix only the following types of errors:
+1. Word substitutions where a similar-sounding word was incorrectly transcribed
+2. Named entities (people, places, organizations, products) that were misheard
+3. Specialized terminology relevant to the context of the conversation
+4. Common homophones or words with similar pronunciations
+
+Important rules:
+- Make the minimum necessary changes to fix obvious errors
+- Do NOT rearrange sentences or change grammatical structure
+- Do NOT add missing words or remove words unless absolutely necessary
+- Look for contextual clues to understand the subject matter
+- Handle multiple languages accurately without translation
+- If you're uncertain about a word or phrase, leave it unchanged
+- Don't explain your changes - just return the corrected text"""
+                },
+                {
+                    "role": "user", 
+                    "content": f"Make minimal corrections to this transcription, preserving the original as much as possible: {text}"
+                }
+            ],
+            max_tokens=200,
+            temperature=0.3  # Very low temperature for more predictable, conservative corrections
+        )
+        result = response.choices[0].message.content.strip()
+        return {"original": text, "corrected": result}
+    except Exception as e:
+        logger.error(f"Text correction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/summarize")
 async def summarize(text: str = Form(...)):
