@@ -7,7 +7,7 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('idle');
   const [messageLog, setMessageLog] = useState([]);
-  
+  const [isProcessingCorrection, setIsProcessingCorrection] = useState(false);
   
   // Add state for AudioWorklet support detection
   const [supportsAudioWorklet, setSupportsAudioWorklet] = useState(true);
@@ -25,6 +25,7 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
       setTranscript('');
       setInterimText('');
       setMessageLog([]);
+      setIsProcessingCorrection(false);
       
       // Request microphone access with specific constraints for quality
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -76,8 +77,14 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
               break;
               
             case 'final':
+            case 'final_original':
               if (data.text && data.text.trim()) {
                 setInterimText(''); // Clear interim text
+                
+                // If it's final_original, show correction in process indicator
+                if (data.type === 'final_original') {
+                  setIsProcessingCorrection(true);
+                }
                 
                 setTranscript(current => {
                   // For final results, append to the existing transcript
@@ -89,6 +96,46 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
                   }
                   
                   return updatedTranscript;
+                });
+              }
+              break;
+              
+            case 'final_corrected':
+              if (data.text && data.text.trim()) {
+                // Clear correction processing indicator
+                setIsProcessingCorrection(false);
+                
+                // Replace the last line of transcript with the corrected version
+                setTranscript(current => {
+                  if (!current) return data.text;
+                  
+                  // Split by lines and replace the last one
+                  const lines = current.split('\n');
+                  
+                  // Check if the last line matches the original text
+                  if (lines.length > 0 && lines[lines.length - 1] === data.original_text) {
+                    // Replace with corrected version
+                    lines[lines.length - 1] = data.text;
+                    
+                    const updatedTranscript = lines.join('\n');
+                    
+                    // Pass the updated transcript to parent component
+                    if (onTranscriptUpdate) {
+                      onTranscriptUpdate(updatedTranscript);
+                    }
+                    
+                    return updatedTranscript;
+                  } else {
+                    // If we can't find the original to replace (unusual case),
+                    // just append the corrected text
+                    const updatedTranscript = `${current}\n[修正] ${data.text}`;
+                    
+                    if (onTranscriptUpdate) {
+                      onTranscriptUpdate(updatedTranscript);
+                    }
+                    
+                    return updatedTranscript;
+                  }
                 });
               }
               break;
@@ -132,7 +179,6 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
     }
   };
   
-  // Modern setup using AudioWorklet
   // Modern setup using AudioWorklet
   const setupModernAudioProcessing = async (stream, websocket) => {
     try {
@@ -224,7 +270,6 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
         const average = sum / bufferLength;
         const level = average / 256; // Normalize to 0-1
         
-        
         requestAnimationFrame(updateVisualization);
       };
       updateVisualization();
@@ -297,7 +342,7 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
     setIsRecording(false);
     setStatus('idle');
     setInterimText('');
-    
+    setIsProcessingCorrection(false);
   };
   
   // Clean up on component unmount
@@ -367,7 +412,13 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
             </div>
           )}
           
-          
+          {/* Display correction indicator */}
+          {isProcessingCorrection && (
+            <div className="mt-2 flex items-center">
+              <div className="animate-spin h-4 w-4 border-2 border-blue-500 rounded-full border-t-transparent mr-2"></div>
+              <p className="text-xs text-blue-600">正在优化转写...</p>
+            </div>
+          )}
         </div>
       )}
       
@@ -392,6 +443,7 @@ function ImprovedLiveTranscription({ onTranscriptUpdate }) {
             <p>WebSocket 状态: {websocketRef.current ? websocketRef.current.readyState : 'null'}</p>
             <p>录音状态: {isRecording ? '录音中' : '已停止'}</p>
             <p>使用 AudioWorklet: {supportsAudioWorklet ? '是' : '否 (使用 ScriptProcessor 兼容模式)'}</p>
+            <p>AI 优化状态: {isProcessingCorrection ? '正在处理优化' : '无优化进行中'}</p>
             <p>消息接收日志:</p>
             <ul className="mt-1 space-y-1">
               {messageLog.map((msg, idx) => (

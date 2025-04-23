@@ -173,6 +173,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(websocket: WebSocket):
     from starlette.websockets import WebSocketDisconnect, WebSocketState
+    import httpx
     
     # Accept the WebSocket connection
     await websocket.accept()
@@ -185,6 +186,9 @@ async def websocket_transcribe(websocket: WebSocket):
     
     # Create a thread-safe queue for messages
     message_queue = queue.Queue()
+    
+    # Create a queue for processing tasks asynchronously
+    processing_queue = asyncio.Queue()
     
     # Create a function to send messages from the main loop
     async def process_messages():
@@ -199,11 +203,73 @@ async def websocket_transcribe(websocket: WebSocket):
                     
                     message_queue.task_done()
                 
+                # Check if there are processing tasks to handle
+                try:
+                    task_data = processing_queue.get_nowait()
+                    text, language, offset, duration = task_data
+                    await process_final_text(text, language, offset, duration)
+                    processing_queue.task_done()
+                except asyncio.QueueEmpty:
+                    pass
+                
                 # Give other tasks a chance to run
                 await asyncio.sleep(0.05)
             except Exception as e:
                 logger.error(f"Error processing message queue: {e}")
                 await asyncio.sleep(0.5)
+    
+    # Add a helper function to correct text via the /correct-text endpoint
+    async def get_corrected_text(text):
+        if not text or len(text.strip()) == 0:
+            return text
+            
+        try:
+            # Use httpx for making the API call
+            async with httpx.AsyncClient() as client:
+                # Call our own endpoint to correct the text
+                base_url = "http://localhost:8000"  # Or get from config
+                response = await client.post(
+                    f"{base_url}/correct-text",
+                    data={"text": text},
+                    timeout=5.0
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return result["corrected"]
+                else:
+                    logger.error(f"Error from correction API: {response.text}")
+                    return text
+        except Exception as e:
+            logger.error(f"Error calling correction API: {e}")
+            return text
+    
+    async def process_final_text(original_text, language, offset, duration):
+        try:
+            # First, send the original text immediately
+            message_queue.put({
+                "type": "final_original",
+                "text": original_text,
+                "language": language,
+                "offset": offset, 
+                "duration": duration
+            })
+            
+            # Then get corrected text
+            corrected_text = await get_corrected_text(original_text)
+            
+            # If the correction is different, send it as well
+            if corrected_text != original_text:
+                message_queue.put({
+                    "type": "final_corrected",
+                    "text": corrected_text,
+                    "original_text": original_text,
+                    "language": language,
+                    "offset": offset, 
+                    "duration": duration
+                })
+        except Exception as e:
+            logger.error(f"Error in process_final_text: {e}")
     
     try:
         # Set up the audio stream format for 16kHz mono audio
@@ -219,8 +285,7 @@ async def websocket_transcribe(websocket: WebSocket):
         
         # Configure auto language detection for English and Chinese
         auto_detect_source_language_config = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
-            languages=["en-US", "zh-CN"]  # English (US) and Chinese (Simplified)
-        )
+            languages=["en-US", "zh-CN"])
         
         # Create speech recognizer with language detection
         speech_recognizer = speechsdk.SpeechRecognizer(
@@ -245,21 +310,24 @@ async def websocket_transcribe(websocket: WebSocket):
                     detected_language = evt.result.properties[
                         speechsdk.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult]
                 
-                # Add message to queue
-                message_queue.put({
-                    "type": "final",
-                    "text": evt.result.text,
-                    "language": detected_language,
-                    "offset": evt.result.offset, 
-                    "duration": evt.result.duration
-                })
+                # Instead of directly calling async function, add to processing queue
+                # This is thread-safe and will be processed by the async task
+                try:
+                    processing_queue.put_nowait((
+                        evt.result.text, 
+                        detected_language,
+                        evt.result.offset, 
+                        evt.result.duration
+                    ))
+                except Exception as e:
+                    logger.error(f"Error adding to processing queue: {e}")
         
         def recognizing_cb(evt):
             if not is_listening:
                 return
                 
             if evt.result.text:
-                # Add message to queue
+                # Add message to queue - for interim results, no correction
                 message_queue.put({
                     "type": "interim",
                     "text": evt.result.text
@@ -306,9 +374,6 @@ async def websocket_transcribe(websocket: WebSocket):
                     break
                 
                 try:
-                    # Convert audio to a format Azure can process
-                    # data = convert_audio_data(data)
-                    
                     # Push audio data to the stream
                     stream.write(data)
                 except Exception as e:
@@ -351,6 +416,14 @@ async def websocket_transcribe(websocket: WebSocket):
         
         # Mark as not listening
         is_listening = False
+        
+        # Cancel the message processing task
+        if 'message_processor_task' in locals() and message_processor_task:
+            message_processor_task.cancel()
+            try:
+                await message_processor_task
+            except asyncio.CancelledError:
+                pass
         
         # Stop speech recognition
         if speech_recognizer:
