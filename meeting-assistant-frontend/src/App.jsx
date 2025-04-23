@@ -21,7 +21,9 @@ function App() {
         // Here you would typically also update the summary
         // Either by calling another API or using a client-side processing function
     };
-
+    const handleSummaryUpdate = (newSummary) => {
+        setSummary(newSummary);
+    };
     const handleExport = () => {
         const blob = new Blob([summary], { type: "text/markdown" });
         const url = URL.createObjectURL(blob);
@@ -55,7 +57,10 @@ function App() {
             {activeTab === "upload" ? (
                 <AudioTranscription />
             ) : (
-                <ImprovedLiveTranscription onTranscriptUpdate={handleTranscriptUpdate} />
+                <ImprovedLiveTranscription
+                    onTranscriptUpdate={handleTranscriptUpdate}
+                    onSummaryUpdate={handleSummaryUpdate}
+                />
             )}
 
             <div className="grid md:grid-cols-2 gap-8">
