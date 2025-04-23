@@ -14,13 +14,18 @@ import wave
 import struct
 import openai
 import queue
+from .ppt_service import ppt_service
+import traceback
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
-
-# Configure logging - reduced to INFO level
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(title="Speech-to-Text API")
@@ -404,6 +409,53 @@ async def summarize(text: str = Form(...)):
     except Exception as e:
         logger.error(f"Summarization error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ppt/outline")
+async def generate_ppt_outline(file: UploadFile = File(...)):
+    """
+    上传PPT文件并生成演讲大纲
+    """
+    logger.info(f"Received PPT file upload request: {file.filename}")
+    
+    # 检查文件类型
+    if not file.filename.endswith(('.ppt', '.pptx')):
+        logger.error(f"Invalid file type: {file.filename}")
+        raise HTTPException(status_code=400, detail="File must be a PowerPoint presentation (.ppt or .pptx)")
+    
+    temp_file_path = None
+    try:
+        # 保存上传的文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pptx') as temp_file:
+            temp_file_path = temp_file.name
+            contents = await file.read()
+            temp_file.write(contents)
+            logger.info(f"Saved uploaded file to: {temp_file_path}")
+        
+        # 提取PPT内容
+        logger.info("Starting to extract PPT content")
+        ppt_content = ppt_service.extract_ppt_content(temp_file_path)
+        logger.info(f"Successfully extracted PPT content, length: {len(ppt_content)}")
+        
+        # 生成大纲
+        logger.info("Starting to generate outline")
+        result = ppt_service.generate_outline(ppt_content)
+        logger.info("Successfully generated outline")
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error processing PPT file: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    finally:
+        # 清理临时文件
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Could not delete temporary file: {temp_file_path}, error: {str(e)}")
 
 
 if __name__ == "__main__":

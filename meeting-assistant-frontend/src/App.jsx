@@ -1,6 +1,7 @@
 import { useState } from "react";
 import AudioTranscription from "./components/AudioTranscription";
 import ImprovedLiveTranscription from "./components/ImprovedLiveTranscription";
+import PPTUpload from "./components/PPTUpload";
 import './index.css'
 
 function App() {
@@ -10,7 +11,7 @@ function App() {
     const [summary, setSummary] = useState(
         "- 会议议题：产品发布日期确定\n- 关键观点：建议7月初，测试6月25完成\n- 任务：李雷 - 测试完成 - 截止6月25\n         张伟 - 发布产品 - 截止7月5"
     );
-    const [activeTab, setActiveTab] = useState("upload"); // "upload" or "live"
+    const [activeTab, setActiveTab] = useState("upload"); // "upload", "live", or "ppt"
 
     // This function will be called by the ImprovedLiveTranscription component
     // when new transcription text is available
@@ -49,36 +50,46 @@ function App() {
                 >
                     实时语音转写
                 </button>
+                <button
+                    className={`px-4 py-2 rounded-t-lg ${activeTab === "ppt" ? "bg-white shadow-sm border-t border-l border-r" : "bg-gray-200"}`}
+                    onClick={() => setActiveTab("ppt")}
+                >
+                    PPT大纲生成
+                </button>
             </div>
 
             {/* Conditional Rendering of Components */}
             {activeTab === "upload" ? (
                 <AudioTranscription />
-            ) : (
+            ) : activeTab === "live" ? (
                 <ImprovedLiveTranscription onTranscriptUpdate={handleTranscriptUpdate} />
+            ) : (
+                <PPTUpload />
             )}
 
-            <div className="grid md:grid-cols-2 gap-8">
-                <section className="bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4 text-gray-800">📡 转写内容</h2>
-                    <pre className="bg-gray-100 p-4 rounded shadow max-h-64 overflow-y-auto whitespace-pre-wrap text-gray-700">
-                        {transcript}
-                    </pre>
-                </section>
+            {activeTab !== "ppt" && (
+                <div className="grid md:grid-cols-2 gap-8">
+                    <section className="bg-white p-6 rounded-lg shadow-md">
+                        <h2 className="text-xl font-semibold mb-4 text-gray-800">📡 转写内容</h2>
+                        <pre className="bg-gray-100 p-4 rounded shadow max-h-64 overflow-y-auto whitespace-pre-wrap text-gray-700">
+                            {transcript}
+                        </pre>
+                    </section>
 
-                <section className="bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4 text-gray-800">📋 结构化摘要</h2>
-                    <pre className="bg-blue-50 p-4 rounded shadow whitespace-pre-wrap text-gray-800">
-                        {summary}
-                    </pre>
-                    <button
-                        onClick={handleExport}
-                        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-                    >
-                        导出 Markdown
-                    </button>
-                </section>
-            </div>
+                    <section className="bg-white p-6 rounded-lg shadow-md">
+                        <h2 className="text-xl font-semibold mb-4 text-gray-800">📋 结构化摘要</h2>
+                        <pre className="bg-blue-50 p-4 rounded shadow whitespace-pre-wrap text-gray-800">
+                            {summary}
+                        </pre>
+                        <button
+                            onClick={handleExport}
+                            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                        >
+                            导出 Markdown
+                        </button>
+                    </section>
+                </div>
+            )}
         </div>
     );
 }
