@@ -5,6 +5,9 @@ azure-cognitiveservices-speech==1.30.0
 python-dotenv==1.0.0
 websockets==11.0.3
 openai
+langgraph
+langchain
+langchain-community
 python-pptx==0.6.21
 langgraph
 langchain-openai
