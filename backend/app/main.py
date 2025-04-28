@@ -14,8 +14,10 @@ import wave
 import struct
 import openai
 import queue
-from .ppt_service import ppt_service
+from .ppt_service import PPTService
+from .speech_generator import SpeechGenerator
 import traceback
+from .next_topic import NextTopicService, NextTopicRequest
 
 # 配置日志
 logging.basicConfig(
@@ -50,6 +52,10 @@ if not speech_key or not speech_region:
 speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_region)
 speech_config.speech_recognition_language = "en-US"  # Default language
 
+# Initialize services
+ppt_service = PPTService()
+speech_generator = SpeechGenerator()
+next_topic_service = NextTopicService()
 
 def convert_audio_data(data, sample_rate=16000, channels=1, sample_width=2):
     """
@@ -439,7 +445,7 @@ async def generate_ppt_outline(file: UploadFile = File(...)):
         
         # 生成大纲
         logger.info("Starting to generate outline")
-        result = ppt_service.generate_outline(ppt_content)
+        result = await ppt_service.generate_outline(ppt_content)
         logger.info("Successfully generated outline")
         
         return result
@@ -457,6 +463,34 @@ async def generate_ppt_outline(file: UploadFile = File(...)):
             except Exception as e:
                 logger.warning(f"Could not delete temporary file: {temp_file_path}, error: {str(e)}")
 
+
+@app.post("/generate-speech")
+async def generate_speech(summary: str = Form(...), outline: str = Form(...)):
+    """
+    根据会议摘要和PPT大纲生成演讲内容
+    """
+    try:
+        logger.info("Received request to generate speech content")
+        speech_content = await speech_generator.generate_speech_content(summary, outline)
+        return {"speech_content": speech_content}
+    except Exception as e:
+        error_msg = f"Error generating speech content: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/custom-next-topic")
+async def custom_next_topic(outline: str = Form(...), history: str = Form(...), pointer: int = Form(0)):
+    try:
+        result = next_topic_service.get_next_topic(NextTopicRequest(
+            outline=outline,
+            history=history,
+            pointer=pointer
+        ))
+        return result
+    except Exception as e:
+        logger.error(f"Error in custom next topic: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

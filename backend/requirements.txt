@@ -6,3 +6,5 @@ python-dotenv==1.0.0
 websockets==11.0.3
 openai
 python-pptx==0.6.21
+langgraph
+langchain-openai
