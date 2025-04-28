@@ -21,13 +21,13 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制整个项目代码（包括 app/ 文件夹）
+# 复制整个后端目录
 COPY . .
 
 # 暴露端口
 EXPOSE 8000
 
-# 启动 main.py（注意路径是 app.main）
+# 启动 main.py
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 

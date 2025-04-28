@@ -16,16 +16,22 @@ import openai
 import queue
 from app.summary_agent import segment_blocks, generate_structured_outline, MeetingState
 
+from .ppt_service import PPTService
+from .speech_generator import SpeechGenerator
+import traceback
+from .next_topic import NextTopicService, NextTopicRequest
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging - reduced to INFO level
-# logging.basicConfig(level=logging.INFO)
-# logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -58,6 +64,19 @@ speech_config.speech_recognition_language = "en-US"  # Default language
 # summary_graph = build_structured_summary_graph()
 summary_state: MeetingState = {"transcript": "", "structured": None, "memory": ""}
 recognized_transcripts = []
+
+# 引入 summary agent
+
+
+# 初始化 Summary Agent
+# summary_graph = build_structured_summary_graph()
+summary_state: MeetingState = {"transcript": "", "structured": None, "memory": ""}
+recognized_transcripts = []
+
+# Initialize services
+ppt_service = PPTService()
+speech_generator = SpeechGenerator()
+next_topic_service = NextTopicService()
 
 
 def convert_audio_data(data, sample_rate=16000, channels=1, sample_width=2):
@@ -455,6 +474,93 @@ async def websocket_transcribe(websocket: WebSocket):
 #     except Exception as e:
 #         logger.error(f"Summarization error: {str(e)}")
 #         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ppt/outline")
+async def generate_ppt_outline(file: UploadFile = File(...)):
+    """
+    上传PPT文件并生成演讲大纲
+    """
+    logger.info(f"Received PPT file upload request: {file.filename}")
+
+    # 检查文件类型
+    if not file.filename.endswith((".ppt", ".pptx")):
+        logger.error(f"Invalid file type: {file.filename}")
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a PowerPoint presentation (.ppt or .pptx)",
+        )
+
+    temp_file_path = None
+    try:
+        # 保存上传的文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as temp_file:
+            temp_file_path = temp_file.name
+            contents = await file.read()
+            temp_file.write(contents)
+            logger.info(f"Saved uploaded file to: {temp_file_path}")
+
+        # 提取PPT内容
+        logger.info("Starting to extract PPT content")
+        ppt_content = ppt_service.extract_ppt_content(temp_file_path)
+        logger.info(f"Successfully extracted PPT content, length: {len(ppt_content)}")
+
+        # 生成大纲
+        logger.info("Starting to generate outline")
+        result = await ppt_service.generate_outline(ppt_content)
+        logger.info("Successfully generated outline")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error processing PPT file: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # 清理临时文件
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(
+                    f"Could not delete temporary file: {temp_file_path}, error: {str(e)}"
+                )
+
+
+@app.post("/generate-speech")
+async def generate_speech(
+    summary: str = Form(...), outline: str = Form(None)  # 设为可选
+):
+    try:
+        logger.info("Received request to generate speech content")
+        # 如果没有提供 outline，使用默认值
+        if not outline:
+            outline = "没有大纲内容，请根据会议摘要生成演讲内容"
+        speech_content = await speech_generator.generate_speech_content(
+            summary, outline
+        )
+        return {"speech_content": speech_content}
+    except Exception as e:
+        error_msg = (
+            f"Error generating speech content: {str(e)}\n{traceback.format_exc()}"
+        )
+        logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/next-topic-prompt")
+async def next_topic_prompt(
+    outline: str = Form(None), history: str = Form(...), pointer: int = Form(0)
+):
+    try:
+        result = next_topic_service.get_next_topic(
+            NextTopicRequest(outline=outline, history=history, pointer=pointer)
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error in custom next topic: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

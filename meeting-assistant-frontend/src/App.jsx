@@ -95,56 +95,64 @@ export default function App() {
             </header>
 
             <div className="flex space-x-4 mb-4">
-                {[
-                    { key: "upload", label: "上传音频转写" },
-                    { key: "live", label: "实时语音转写" },
-                ].map((t) => (
-                    <button
-                        key={t.key}
-                        onClick={() => setActiveTab(t.key)}
-                        className={`px-4 py-2 rounded-t-lg ${activeTab === t.key
-                                ? "bg-white shadow-sm border-t border-l border-r"
-                                : "bg-gray-200"
-                            }`}
-                    >
-                        {t.label}
-                    </button>
-                ))}
+                <button
+                    className={`px-4 py-2 rounded-t-lg ${activeTab === "upload" ? "bg-white shadow-sm border-t border-l border-r" : "bg-gray-200"}`}
+                    onClick={() => setActiveTab("upload")}
+                >
+                    上传音频转写
+                </button>
+                <button
+                    className={`px-4 py-2 rounded-t-lg ${activeTab === "live" ? "bg-white shadow-sm border-t border-l border-r" : "bg-gray-200"}`}
+                    onClick={() => setActiveTab("live")}
+                >
+                    实时语音转写
+                </button>
+                <button
+                    className={`px-4 py-2 rounded-t-lg ${activeTab === "ppt" ? "bg-white shadow-sm border-t border-l border-r" : "bg-gray-200"}`}
+                    onClick={() => setActiveTab("ppt")}
+                >
+                    PPT大纲生成
+                </button>
+
             </div>
 
             {activeTab === "upload" ? (
                 <AudioTranscription />
-            ) : (
-                <ImprovedLiveTranscription
+            ) : activeTab == "live" ? (
+                < ImprovedLiveTranscription
                     onTranscriptUpdate={setTranscript}
                     onSummaryUpdate={handleSummaryUpdate}
                 />
+            ) : (
+                <PPTUpload />
             )}
 
-            <div className="grid md:grid-cols-2 gap-8">
-                <section className="bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4">📡 转写内容</h2>
-                    <pre className="bg-gray-100 p-4 rounded shadow max-h-64 overflow-y-auto whitespace-pre-wrap">
-                        {transcript}
-                    </pre>
-                </section>
+            {activeTab !== "ppt" && (
+                <div className="grid md:grid-cols-2 gap-8">
+                    <section className="bg-white p-6 rounded-lg shadow-md">
+                        <h2 className="text-xl font-semibold mb-4">📡 转写内容</h2>
+                        <pre className="bg-gray-100 p-4 rounded shadow max-h-64 overflow-y-auto whitespace-pre-wrap">
+                            {transcript}
+                        </pre>
+                    </section>
 
-                <section className="bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4">📋 结构化摘要</h2>
-                    <ReactQuill
-                        ref={quillRef}
-                        readOnly
-                        theme="snow"
-                        modules={{ toolbar: false }}
-                    />
-                    <button
-                        onClick={exportMd}
-                        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                    >
-                        导出 Markdown
-                    </button>
-                </section>
-            </div>
+                    <section className="bg-white p-6 rounded-lg shadow-md">
+                        <h2 className="text-xl font-semibold mb-4">📋 结构化摘要</h2>
+                        <ReactQuill
+                            ref={quillRef}
+                            readOnly
+                            theme="snow"
+                            modules={{ toolbar: false }}
+                        />
+                        <button
+                            onClick={exportMd}
+                            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                        >
+                            导出 Markdown
+                        </button>
+                    </section>
+                </div>
+            )}
         </div>
     );
 }
