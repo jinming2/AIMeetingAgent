@@ -465,12 +465,15 @@ async def generate_ppt_outline(file: UploadFile = File(...)):
 
 
 @app.post("/generate-speech")
-async def generate_speech(summary: str = Form(...), outline: str = Form(...)):
-    """
-    根据会议摘要和PPT大纲生成演讲内容
-    """
+async def generate_speech(
+    summary: str = Form(...),
+    outline: str = Form(None)  # 设为可选
+):
     try:
         logger.info("Received request to generate speech content")
+        # 如果没有提供 outline，使用默认值
+        if not outline:
+            outline = "没有大纲内容，请根据会议摘要生成演讲内容"
         speech_content = await speech_generator.generate_speech_content(summary, outline)
         return {"speech_content": speech_content}
     except Exception as e:
@@ -479,8 +482,12 @@ async def generate_speech(summary: str = Form(...), outline: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/custom-next-topic")
-async def custom_next_topic(outline: str = Form(...), history: str = Form(...), pointer: int = Form(0)):
+@app.post("/next-topic-prompt")
+async def next_topic_prompt(
+    outline: str = Form(None),
+    history: str = Form(...),
+    pointer: int = Form(0)
+):
     try:
         result = next_topic_service.get_next_topic(NextTopicRequest(
             outline=outline,
