@@ -15,6 +15,7 @@ import struct
 import openai
 import queue
 from app.summary_agent import segment_blocks, generate_structured_outline, MeetingState
+from app.ppt_auto_sum import PPTAutoSummarizer
 
 from .ppt_service import PPTService
 from .speech_generator import SpeechGenerator
@@ -561,6 +562,26 @@ async def next_topic_prompt(
     except Exception as e:
         logger.error(f"Error in custom next topic: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+ppt_summarizer = PPTAutoSummarizer(model="gpt-4o-mini")
+
+@app.post("/ppt/auto-summary")
+async def auto_summary(file: UploadFile = File(...)):
+    if not file.filename.endswith((".ppt", ".pptx")):
+        raise HTTPException(400, "文件格式必须是 .ppt 或 .pptx")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
+        tmp.write(await file.read())
+        path = tmp.name
+
+    try:
+        outline = ppt_summarizer.summarize_ppt(path)
+        # 直接返回字符串，前端拿到后放到 overallSummary
+        return {"overall_summary": outline}
+    finally:
+        try: os.unlink(path)
+        except: pass
 
 
 if __name__ == "__main__":
