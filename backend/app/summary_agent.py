@@ -3,6 +3,8 @@ import logging
 import openai
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
+import json
+from openai import OpenAI
 
 # 配置 logger，确保 DEBUG 级别消息会输出
 logger = logging.getLogger(__name__)
@@ -19,6 +21,9 @@ if not logger.hasHandlers():
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     logger.error("Missing OPENAI_API_KEY environment variable")
+
+
+client = OpenAI()
 
 
 # 状态类型定义
@@ -44,41 +49,118 @@ def segment_blocks(state: MeetingState) -> dict:
 
 def generate_structured_outline(state: MeetingState) -> dict:
     """
-    基于 memory 调用 OpenAI 生成多级结构化摘要。
+    基于 memory 和 existing structured summary，调用 OpenAI 生成多级结构化总结（标准JSON版）
     """
-    # logger.warning("[generate_structured_outline] START")
-
-    # OpenAI 调用代码
-    client = openai.OpenAI()
     memory = state.get("memory", "").strip()
+    previous_structured = state.get("structured", None)
+
+    previous_summary_text = previous_structured.strip() if previous_structured else "[]"
+    logger.info("Memory " + memory + "\n")
+    logger.info("previous_summary" + previous_summary_text + "\n")
+    n = 3
     prompt = f"""
-你是一个会议总结助手。
+        你是一个会议总结助手，请基于已有的结构化摘要，结合本次新增会议内容，更新会议大纲。
 
-以下是会议历史内容：
-{memory}
+        注意要求：
+        - 对于已有小节（如标题、内容），如果没有非常重要的新变化，不要随意改动。
+        - 仅当新的会议内容中出现重要新增信息时，才新增或修改对应小节。
+        - 新增内容时，只关注最近新增的{n}条发言，忽略过往重复或无关信息。
+        - 如果新的会议内容无新增重要信息，可以不做任何修改。
+        - 新增的小节请合理插入到合适的位置，保持编号（如1, 1.1, 2, 2.1等）的逻辑顺序。
+        - 所有小节应确保内容相关性清晰，避免出现主题跳跃或无关堆砌。
+        - 根据输入语言判断选择相同语言输出
 
-请在此基础上，基于最新这一段内容生成多级结构化总结（编号格式如：1, 1.1, 1.2, 1.2.1）；
-每个部分请包含简洁标题与对应内容。只需输出最新的摘要结果。
-"""
-    # logger.info(f"[generate_structured_outline] prompt:\n{prompt}")
+        格式要求：
+        - 仅返回符合以下格式的 JSON 数组，无需额外文字说明。
+        - 每个小节是一个对象，包含字段：
+        - id（如 \"1\", \"1.1\"）
+        - title（小节标题，简洁准确）
+        - content（小节内容，概括核心信息）
+
+        遵循以下结构格式：
+                {{
+                    "summary": [
+                        {{
+                            "id": "1",
+                            "title": "Introduction",
+                            "content": "Summary of Introduction"
+                        }},
+                        {{
+                            "id": "1.1",
+                            "title": "Background",
+                            "content": "Details about background"
+                        }}
+                    ]
+                }}
+        ---
+
+        已有的结构化总结（JSON数组）是：
+        {previous_summary_text}
+
+        本次新增的会议内容是：
+        {memory}
+
+        请根据以上信息，输出更新后的完整结构化摘要（整个 JSON 数组）。
+
+        
+        """
+
+    schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "meeting_summary",
+            "strict": True,
+            "schema": {
+                "type": "object",  # ← root must be object
+                "additionalProperties": False,
+                "required": ["summary"],
+                "properties": {
+                    "summary": {
+                        "type": "array",  # ← your array here
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["id", "title", "content"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+            },
+        },
+    }
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+            response_format=schema,
         )
-        usage = getattr(response, "usage", None)
-        if usage:
+
+        raw_json_content = response.choices[0].message.content
+
+        try:
+            structured_list = json.loads(raw_json_content)
+            # logger.info("[generate_structured_outline] JSON parsed successfully.")
             logger.info(
-                f"[OpenAI usage] prompt_tokens={usage.prompt_tokens}, "
-                f"completion_tokens={usage.completion_tokens}, total={usage.total_tokens}"
+                "[generate_structured_outline] Structured JSON:\n"
+                + json.dumps(structured_list, indent=2, ensure_ascii=False)
             )
-        content = response.choices[0].message.content
-        # logger.info(f"[generate_structured_outline] output summary:\n{content!r}")
-        return {"structured": content, "memory": memory}
+        except json.JSONDecodeError as e:
+            logger.error(f"[generate_structured_outline] JSON parsing failed: {e}")
+            structured_list = []  # fallback，防止前端崩掉
+
+        return {
+            "structured": json.dumps(structured_list, ensure_ascii=False),
+            "memory": memory,
+        }
+
     except Exception as e:
-        logger.exception("[generate_structured_outline] OpenAI call failed")
-        return {"structured": f"【摘要失败】{e}", "memory": memory}
+        logger.exception("[generate_structured_outline] OpenAI API call failed.")
+        return {"structured": "[]", "memory": memory}  # fallback成空结构
 
 
 def build_structured_summary_graph():

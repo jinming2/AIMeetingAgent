@@ -298,18 +298,19 @@ async def websocket_transcribe(websocket: WebSocket):
                 # 记录本次 transcript，用于计数
                 recognized_transcripts.append(evt.result.text)
 
-                # 每 10 段生成结构化摘要
-                if len(recognized_transcripts) >= 10:
+                # 每 n 段生成结构化摘要
+                if len(recognized_transcripts) >= 3:
                     # logger.info(
                     #     "[Batch] Triggering structured summary after 10 transcripts"
                     # )
-                    struct_input = {
-                        "transcript": "",
-                        "structured": None,
-                        "memory": summary_state["memory"],
-                    }
-                    struct_result = generate_structured_outline(struct_input)
-                    summary_state.update(struct_result)
+                    # struct_input = {
+                    #     "transcript": "",
+                    #     "structured": None,
+                    #     "memory": summary_state["memory"],
+                    # }
+                    struct_result = generate_structured_outline(summary_state)
+                    summary_state["structured"] = struct_result["structured"]
+                    summary_state["memory"] = struct_result["memory"]
                     message_queue.put(
                         {"structured_summary": summary_state["structured"]}
                     )
