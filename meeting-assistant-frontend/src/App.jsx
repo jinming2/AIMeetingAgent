@@ -118,7 +118,7 @@ export default function App() {
             </div>
 
             {activeTab === "upload" ? (
-                <AudioTranscription />
+                <AudioTranscription onSummaryUpdate={handleSummaryUpdate} />
             ) : activeTab == "live" ? (
                 < ImprovedLiveTranscription
                     onTranscriptUpdate={setTranscript}

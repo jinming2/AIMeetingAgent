@@ -47,6 +47,103 @@ def segment_blocks(state: MeetingState) -> dict:
     return {"transcript": text, "memory": updated_memory}
 
 
+def generate_once_structured_outline(text: str) -> dict:
+    """
+    基于完整文本，直接生成一个新的结构化会议总结（不考虑历史，不叠加）
+    """
+    prompt = f"""
+        你是一个会议总结助手，请根据下面这段完整的会议文字，生成结构化的会议大纲总结。
+
+        要求：
+        - 根据内容合理分成章节，每章起一个简明的标题，并用简洁语言总结该部分核心内容。
+        - 标题使用编号（如 "1", "1.1", "2", "2.1" 等），层级合理。
+        - 不要遗漏重要讨论点。
+        - 只基于提供的这段文字总结，不需要参考历史记录。
+        - 遇到模糊或跳跃内容时，合理推断并归纳整理。
+
+        输出格式：
+        - 返回一个 JSON 数组，数组中每个元素是一个对象，包含字段：
+            - id（章节编号）
+            - title（章节标题）
+            - content（章节内容）
+
+        示例格式：
+        [
+        {{
+            "id": "1",
+            "title": "Introduction",
+            "content": "Summary of the introduction."
+        }},
+        {{
+            "id": "2",
+            "title": "Main Discussion",
+            "content": "Summary of main discussion points."
+        }}
+        ]
+
+        下面是会议内容：
+        -----------------------
+        {text}
+        """
+
+    schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "initial_meeting_summary",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,  # 🔥 这里加了！
+                "required": ["summary"],
+                "properties": {
+                    "summary": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,  # 🔥 每一项也加了！
+                            "properties": {
+                                "id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["id", "title", "content"],
+                        },
+                    }
+                },
+            },
+        },
+    }
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            response_format=schema,
+        )
+
+        raw_json_content = response.choices[0].message.content
+
+        try:
+            structured_list = json.loads(raw_json_content)
+            logger.info(
+                "[generate_initial_structured_outline] Structured JSON:\n"
+                + json.dumps(structured_list, indent=2, ensure_ascii=False)
+            )
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"[generate_initial_structured_outline] JSON parsing failed: {e}"
+            )
+            structured_list = []  # fallback
+
+        return {"structured": json.dumps(structured_list, ensure_ascii=False)}
+
+    except Exception as e:
+        logger.exception(
+            "[generate_initial_structured_outline] OpenAI API call failed."
+        )
+        return {"structured": "[]"}  # fallback
+
+
 def generate_structured_outline(state: MeetingState) -> dict:
     """
     基于 memory 和 existing structured summary，调用 OpenAI 生成多级结构化总结（标准JSON版）
@@ -57,7 +154,7 @@ def generate_structured_outline(state: MeetingState) -> dict:
     previous_summary_text = previous_structured.strip() if previous_structured else "[]"
     logger.info("Memory " + memory + "\n")
     logger.info("previous_summary" + previous_summary_text + "\n")
-    n = 3
+    n = 10
     prompt = f"""
         你是一个会议总结助手，请基于已有的结构化摘要，结合本次新增会议内容，更新会议大纲。
 

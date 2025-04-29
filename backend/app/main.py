@@ -14,7 +14,12 @@ import wave
 import struct
 import openai
 import queue
-from app.summary_agent import segment_blocks, generate_structured_outline, MeetingState
+from app.summary_agent import (
+    segment_blocks,
+    generate_once_structured_outline,
+    generate_structured_outline,
+    MeetingState,
+)
 
 from .ppt_service import PPTService
 from .speech_generator import SpeechGenerator
@@ -197,7 +202,13 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
         # Return the list of utterances
         if utterances:
-            return {"utterances": utterances}
+            full_text = "\n".join([utt["text"] for utt in utterances])
+            struct_result = generate_once_structured_outline(full_text)
+
+            return {
+                "utterances": utterances,
+                "structured_summary": struct_result["structured"],
+            }
         else:
             return {"error": "No speech could be recognized"}
 
@@ -317,8 +328,8 @@ async def websocket_transcribe(websocket: WebSocket):
                 # 记录本次 transcript，用于计数
                 recognized_transcripts.append(evt.result.text)
 
-                # 每 n 段生成结构化摘要
-                if len(recognized_transcripts) >= 3:
+                # 每 n=10 段生成结构化摘要
+                if len(recognized_transcripts) >= 10:
                     # logger.info(
                     #     "[Batch] Triggering structured summary after 10 transcripts"
                     # )
