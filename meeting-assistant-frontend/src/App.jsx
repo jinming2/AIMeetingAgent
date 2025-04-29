@@ -5,7 +5,7 @@ import "react-quill/dist/quill.snow.css";
 import AudioTranscription from "./components/AudioTranscription";
 import ImprovedLiveTranscription from "./components/ImprovedLiveTranscription";
 import "./index.css";
-import PPTUpload from "./components/PPTUpload";
+import PPTUpload from "./components/PPTUpload2";
 
 const TYPE_SPEED = 30;                         // 动画间隔
 
