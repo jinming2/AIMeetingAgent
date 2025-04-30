@@ -8,6 +8,7 @@ import traceback
 # 配置日志
 logger = logging.getLogger(__name__)
 
+
 class PPTService:
     def __init__(self):
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -23,23 +24,29 @@ class PPTService:
             logger.info(f"Attempting to extract content from PPT file: {ppt_path}")
             presentation = pptx.Presentation(ppt_path)
             content = []
-            
+
             for slide in presentation.slides:
                 slide_content = []
                 for shape in slide.shapes:
                     if hasattr(shape, "text"):
                         slide_content.append(shape.text)
-                
+
                 if slide_content:
                     content.append("\n".join(slide_content))
-            
+
             extracted_content = "\n\n".join(content)
-            logger.info(f"Successfully extracted content from PPT file. Content length: {len(extracted_content)}")
+            logger.info(
+                f"Successfully extracted content from PPT file. Content length: {len(extracted_content)}"
+            )
             return extracted_content
         except Exception as e:
-            error_msg = f"Error extracting PPT content: {str(e)}\n{traceback.format_exc()}"
+            error_msg = (
+                f"Error extracting PPT content: {str(e)}\n{traceback.format_exc()}"
+            )
             logger.error(error_msg)
-            raise HTTPException(status_code=500, detail=f"Error processing PPT file: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error processing PPT file: {str(e)}"
+            )
 
     async def generate_outline(self, ppt_content: str) -> dict:
         """
@@ -82,21 +89,20 @@ class PPTService:
 
             logger.info("Sending request to OpenAI API")
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}]
+                model="gpt-4o", messages=[{"role": "user", "content": prompt}]
             )
-            
+
             outline = response.choices[0].message.content
             logger.info("Successfully generated outline")
-            
-            return {
-                "outline": outline,
-                "status": "success"
-            }
+
+            return {"outline": outline, "status": "success"}
         except Exception as e:
             error_msg = f"Error generating outline: {str(e)}\n{traceback.format_exc()}"
             logger.error(error_msg)
-            raise HTTPException(status_code=500, detail=f"Error generating outline: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error generating outline: {str(e)}"
+            )
+
 
 # 创建全局实例
-ppt_service = PPTService() 
+ppt_service = PPTService()

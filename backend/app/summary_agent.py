@@ -42,6 +42,8 @@ def segment_blocks(state: MeetingState) -> dict:
     # logger.info(
     #     f"[segment_blocks] received transcript={text!r}, prev_memory={prev_memory!r}"
     # )
+    if text and text not in prev_memory.split("\n"):
+        prev_memory = f"{prev_memory}\n{text}" if prev_memory else text
     updated_memory = (prev_memory + "\n" + text).strip()
     # logger.info(f"[segment_blocks] updated_memory={updated_memory!r}")
     return {"transcript": text, "memory": updated_memory}
@@ -154,7 +156,7 @@ def generate_structured_outline(state: MeetingState) -> dict:
     previous_summary_text = previous_structured.strip() if previous_structured else "[]"
     logger.info("Memory " + memory + "\n")
     logger.info("previous_summary" + previous_summary_text + "\n")
-    n = 10
+    n = 5
     prompt = f"""
         你是一个会议总结助手，请基于已有的结构化摘要，结合本次新增会议内容，更新会议大纲。
 

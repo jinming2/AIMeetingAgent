@@ -25,7 +25,7 @@ from app.ppt_auto_sum import PPTAutoSummarizer
 from .ppt_service import PPTService
 from .speech_generator import SpeechGenerator
 import traceback
-from .next_topic import NextTopicService, NextTopicRequest
+from app.next_topic import NextTopicReq, handle_next_topic
 
 # 配置日志
 logging.basicConfig(
@@ -63,13 +63,6 @@ if not speech_key or not speech_region:
 speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_region)
 speech_config.speech_recognition_language = "en-US"  # Default language
 
-# 引入 summary agent
-
-
-# 初始化 Summary Agent
-# summary_graph = build_structured_summary_graph()
-summary_state: MeetingState = {"transcript": "", "structured": None, "memory": ""}
-recognized_transcripts = []
 
 # 引入 summary agent
 
@@ -82,7 +75,7 @@ recognized_transcripts = []
 # Initialize services
 ppt_service = PPTService()
 speech_generator = SpeechGenerator()
-next_topic_service = NextTopicService()
+# next_topic_service = NextTopicService()
 
 
 def convert_audio_data(data, sample_rate=16000, channels=1, sample_width=2):
@@ -229,6 +222,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
 async def websocket_transcribe(websocket: WebSocket):
     from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+    summary_state["memory"] = ""
+    recognized_transcripts.clear()
     # Accept the WebSocket connection
     await websocket.accept()
     logger.info("WebSocket connection accepted")
@@ -330,7 +325,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 recognized_transcripts.append(evt.result.text)
 
                 # 每 n=10 段生成结构化摘要
-                if len(recognized_transcripts) >= 10:
+                if len(recognized_transcripts) >= 5:
                     # logger.info(
                     #     "[Batch] Triggering structured summary after 10 transcripts"
                     # )
@@ -563,16 +558,16 @@ async def generate_speech(
 
 @app.post("/next-topic-prompt")
 async def next_topic_prompt(
-    outline: str = Form(None), history: str = Form(...), pointer: int = Form(0)
+    structured_summary: str = Form(...),
+    recent_transcript: str = Form(...),
+    presentation_outline: str | None = Form(None),
 ):
-    try:
-        result = next_topic_service.get_next_topic(
-            NextTopicRequest(outline=outline, history=history, pointer=pointer)
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Error in custom next topic: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    req = NextTopicReq(
+        structured_summary=structured_summary,
+        recent_transcript=recent_transcript,
+        presentation_outline=presentation_outline,
+    )
+    return handle_next_topic(req)
 
 
 ppt_summarizer = PPTAutoSummarizer(model="gpt-4o-mini")

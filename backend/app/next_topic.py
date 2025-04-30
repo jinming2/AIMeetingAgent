@@ -1,137 +1,120 @@
-from typing import List, Dict
+"""
+Next-Topic Engine  v2.1  –  Markdown-out
+----------------------------------------
+Given
+  • structured_summary (JSON string produced by summary_agent)
+  • recent_transcript  (plain text, last N lines)
+  • presentation_outline (optional PPT outline)
+
+Return
+  markdown : "* bullet1\n* bullet2…" – next things the speaker should cover
+  section_title / confidence (auxiliary)
+"""
+
+from __future__ import annotations
+from typing import List, Dict, Any
+import json, os, logging
+
 from fastapi import HTTPException
 from pydantic import BaseModel
-from langgraph.graph import StateGraph, START, END
-from langchain_openai import ChatOpenAI
-import os, re
-import logging
+from openai import OpenAI, BadRequestError
 
 logger = logging.getLogger(__name__)
 
-# -----------------------------------------------------------
-# Step 1: State definitions
+# ── Pydantic Schemas ───────────────────────────────────────────────────────
 
-class OutlineBlock(BaseModel):
-    title: str
-    content: str
 
-class TalkState(BaseModel):
-    outline_sections: List[OutlineBlock]
-    pointer: int = 0
-    summary_so_far: str
-    next_prompt: str | None = None
+class NextTopicReq(BaseModel):
+    structured_summary: str  # JSON string
+    recent_transcript: str  # last few minutes transcript
+    presentation_outline: str | None = None  # optional
 
-class NextTopicRequest(BaseModel):
-    outline: str | None = None
-    history: str
-    pointer: int | None = 0
 
-class NextTopicService:
+class NextTopicResp(BaseModel):
+    markdown: str  # "* bullet" list
+    section_title: str | None = None
+    confidence: float | None = None
+
+
+# ── Core Engine ────────────────────────────────────────────────────────────
+
+
+class NextTopicEngine:
     def __init__(self):
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
-        self.graph = self._build_graph()
-        logger.info("NextTopicService initialized")
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY missing")
+        self.client = OpenAI(api_key=api_key)
+        logger.info("NextTopicEngine ready")
 
-    def _build_graph(self):
-        g = StateGraph(state_schema=TalkState)
-        g.add_node("choose", self.choose_next)
-        g.add_node("prompt", self.craft_prompt)
-        g.add_edge(START, "choose")
-        g.add_edge("choose", "prompt")
-        g.add_edge("prompt", END)
-        return g.compile()
+    # public ---------------------------------------------------------------
+    def infer(self, req: NextTopicReq) -> NextTopicResp:
+        blocks = self._parse_summary(req.structured_summary)
+        unfinished = self._detect_unfinished(blocks, req.recent_transcript)[:2]
 
-    def parse_structured_outline(self, outline: str | None) -> List[Dict[str, str]]:
-        """
-        Parse outline string like:
-        1. 【子主题1：XXX】\n - 开场引导…\n - 要点…
-        into a list of {title, content} blocks
-        """
-        if not outline:
-            return [{"title": "自由演讲", "content": "请根据历史内容继续演讲"}]
-            
-        try:
-            sections = re.split(r"\n\s*\d+\.\s+【(.*?)】", outline)
-            result = []
-            for i in range(1, len(sections), 2):
-                title = sections[i]
-                content = sections[i+1].strip()
-                result.append({"title": title, "content": content})
-            return result
-        except Exception as e:
-            logger.error(f"Error parsing outline: {str(e)}")
-            return [{"title": "自由演讲", "content": "请根据历史内容继续演讲"}]
-
-    def choose_next(self, state: TalkState) -> TalkState:
-        if state.pointer >= len(state.outline_sections):
-            raise HTTPException(status_code=200, detail="🎉 已经讲完全部大纲！")
-        return state
-
-    def craft_prompt(self, state: TalkState) -> TalkState:
-        block = state.outline_sections[state.pointer]
-
-        system_msg = (
-            "你是一个专业的演讲提示助手。你的任务是帮助演讲者保持演讲的连贯性和专业性。\n"
-            "请根据以下要求生成提示：\n"
-            "1. 提示应该简洁明了，每个要点不超过20个字\n"
-            "2. 提示应该自然流畅，符合演讲的语境\n"
-            "3. 提示应该帮助演讲者自然地过渡到下一个话题\n"
-            "4. 如果大纲中有具体内容，请确保提示包含这些关键点\n"
-            "5. 提示应该保持专业性，避免口语化表达\n"
-            "请生成3-5个要点，每个要点用短句表示。"
+        prompt = self._make_prompt(
+            unfinished=unfinished,
+            outline=req.presentation_outline,
+            transcript=req.recent_transcript,
         )
 
-        user_msg = f"""演讲历史内容：
-{state.summary_so_far}
-
-当前章节标题：{block.title}
-章节内容：{block.content}
-
-请根据以上内容，生成接下来要讲的要点提示。"""
-
-        logger.info(f"Generating prompt for section: {block.title}")
-        response = self.llm.invoke([
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg}
-        ])
-
-        state.next_prompt = response.content.strip()
-        state.pointer += 1
-        return state
-
-    def get_next_topic(self, req: NextTopicRequest) -> Dict[str, str]:
         try:
-            parsed = self.parse_structured_outline(req.outline)
-            sections = [OutlineBlock(**p) for p in parsed]
-
-            state = TalkState(
-                outline_sections=sections,
-                pointer=req.pointer or 0,
-                summary_so_far=req.history
+            res = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
             )
+            md = res.choices[0].message.content.strip()
+            title = unfinished[0]["title"] if unfinished else None
+            conf = 1.0 if unfinished else 0.3
+            return NextTopicResp(markdown=md, section_title=title, confidence=conf)
 
-            raw_result = self.graph.invoke(state)
-            result = TalkState(**raw_result) 
-            
-            # 如果没有outline，只返回prompt
-            if not req.outline:
-                return {
-                    "next_prompt": result.next_prompt
-                }
-                
-            # 有outline时返回完整信息
-            return {
-                "next_prompt": result.next_prompt,
-                "next_pointer": result.pointer,
-                "remaining_sections": len(sections) - result.pointer,
-                "current_title": sections[result.pointer - 1].title
-            }
-        except Exception as e:
-            logger.error(f"Error getting next topic: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
+        except BadRequestError as e:
+            logger.error(f"OpenAI error: {e}")
+            raise HTTPException(status_code=500, detail="LLM call failed")
 
-# 检查必要的环境变量
-required_env_vars = ["OPENAI_API_KEY", "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"]
-missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-if missing_vars:
-    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+    # helpers --------------------------------------------------------------
+    def _parse_summary(self, raw: str) -> List[Dict[str, str]]:
+        obj = json.loads(raw)
+        if not isinstance(obj, dict) or "summary" not in obj:
+            raise HTTPException(status_code=400, detail="Bad structured_summary JSON")
+        return obj["summary"]
+
+    def _detect_unfinished(self, blocks, transcript) -> List[Dict[str, str]]:
+        tx = transcript.lower()
+        return [b for b in blocks if b["title"].lower()[:25] not in tx]
+
+    def _make_prompt(self, *, unfinished, outline, transcript) -> str:
+        summary_ctx = (
+            "\n\n".join(f"### {b['title']}\n{b['content']}" for b in unfinished)
+            or "（No structured summary, free-flow speech）"
+        )
+
+        outline_ctx = f"\n\n---\nPPT Outline (full):\n{outline}" if outline else ""
+
+        prompt = f"""You are an expert speech coach.
+
+Structured Summary (upcoming sections):
+{summary_ctx}{outline_ctx}
+
+Recent transcript (speaker just said):
+\"\"\"{transcript[-1200:]}\"\"\"
+
+**Task**
+
+Write what the speaker should cover *next*, as 3-6 concise bullet points
+(max 15 English words each). **Output strictly in Markdown bullet list**, like:
+
+* point one
+* point two
+"""
+        return prompt
+
+
+# ── FastAPI Adapter  ───────────────────────────────────────────────────────
+
+engine = NextTopicEngine()
+
+
+def handle_next_topic(req: NextTopicReq) -> Dict[str, Any]:
+    return engine.infer(req).dict()

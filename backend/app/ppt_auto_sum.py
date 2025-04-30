@@ -3,6 +3,7 @@ import logging
 from pptx import Presentation
 import openai
 
+
 def load_api_key():
     """
     Load OpenAI API key from environment variable.
@@ -12,18 +13,22 @@ def load_api_key():
         raise ValueError("Missing OPENAI_API_KEY environment variable")
     openai.api_key = key
 
+
 class PPTAutoSummarizer:
     """
     A utility class to extract content from PPTX files and generate a structured outline using OpenAI.
     """
-    def __init__(self, model: str = "gpt-4o-mini"):
+
+    def __init__(self, model: str = "gpt-4o"):
         load_api_key()
         self.model = model
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.INFO)
         if not self.logger.hasHandlers():
             handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+            )
             self.logger.addHandler(handler)
 
     def extract_slides(self, ppt_path: str) -> list[str]:
