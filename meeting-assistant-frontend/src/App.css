@@ -1,42 +1,94 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+.app-container {
+    font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+    padding: 1.5rem 1rem;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
+    gap: 1rem;
+    flex-wrap: wrap
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.actions {
+    display: flex;
+    gap: .75rem
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.btn,
+.actions button {
+    @apply px-4 py-2 rounded text-white font-medium transition-colors;
+    background: #2563eb;
+    /* blue-600 */
 }
 
-.card {
-  padding: 2em;
+.btn:hover {
+    background: #1d4ed8
 }
 
-.read-the-docs {
-  color: #888;
+.btn.live-on {
+    background: #dc2626;
+}
+
+.btn.live-on:hover {
+    background: #b91c1c
+}
+
+.main-content {
+    display: grid;
+    gap: 1rem;
+}
+
+.main-content.two-cols {
+    grid-template-columns: 1fr 1fr
+}
+
+.main-content.three-cols {
+    grid-template-columns: 1fr 2fr 2fr
+}
+
+.panel {
+    @apply bg-white rounded-lg border-2 border-gray-400 p-4 shadow;
+    min-height: 280px;
+
+}
+
+.panel-title {
+    @apply font-semibold mb-2 text-gray-700;
+}
+
+.scroll-box {
+    @apply bg-gray-50 rounded p-3 overflow-y-auto whitespace-pre-wrap text-sm;
+    max-height: 400px;
+    /* 只限制 transcript，outline 已取消 */
+}
+
+.scroll-box.placeholder {
+    color: #9ca3af
+}
+
+
+.next-panel {
+    @apply border border-gray-300 rounded p-3 bg-gray-50;
+    min-width: 320px;
+    max-width: 480px;
+}
+
+
+.next-panel .hint {
+    color: #9ca3af;
+    font-style: italic;
+    font-size: .875rem
+}
+
+.logo-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #1d4ed8;
+    margin: 0 0 1rem;
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    letter-spacing: .5px;
+    text-align: center;
 }
