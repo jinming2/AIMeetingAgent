@@ -43,8 +43,9 @@ def segment_blocks(state: MeetingState) -> dict:
     #     f"[segment_blocks] received transcript={text!r}, prev_memory={prev_memory!r}"
     # )
     if text and text not in prev_memory.split("\n"):
-        prev_memory = f"{prev_memory}\n{text}" if prev_memory else text
-    updated_memory = (prev_memory + "\n" + text).strip()
+        updated_memory = f"{prev_memory}\n{text}" if prev_memory else text
+    else:
+        updated_memory = prev_memory
     # logger.info(f"[segment_blocks] updated_memory={updated_memory!r}")
     return {"transcript": text, "memory": updated_memory}
 

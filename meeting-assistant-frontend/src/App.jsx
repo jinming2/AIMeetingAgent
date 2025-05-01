@@ -10,7 +10,7 @@ import ReactMarkdown from "react-markdown";
 import "./App.css";
 
 /* ---------- helpers ---------- */
-const TYPE_SPEED = 20;
+const TYPE_SPEED = 30;
 const toDelta = (map) => {
     const ops = [];
     Array.from(map.values())
@@ -69,29 +69,100 @@ export default function App() {
     const appendTranscript = (txt) =>
         setTranscript(prev => prev.endsWith(txt) ? prev : (prev ? `${prev}\n${txt}` : txt));
 
-    /* 处理结构化摘要 */
-    const handleSummaryUpdate = async (jsonStr) => {
-        const { summary } = JSON.parse(jsonStr);
-        setStructuredJson(jsonStr);
-        const newMap = new Map(summary.map(x => [x.id, x]));
-        const editor = quillRef.current.getEditor();
-        const diff = editor.getContents().diff(toDelta(newMap));
+    // /* 处理结构化摘要 */
+    // const handleSummaryUpdate = async (jsonStr) => {
+    //     const { summary } = JSON.parse(jsonStr);
+    //     setStructuredJson(jsonStr);
+    //     const newMap = new Map(summary.map(x => [x.id, x]));
+    //     const editor = quillRef.current.getEditor();
+    //     const diff = editor.getContents().diff(toDelta(newMap));
 
-        const statics = diff.ops.filter(op => !op.insert);
-        statics.length && editor.updateContents({ ops: statics }, "silent");
+    //     const statics = diff.ops.filter(op => !op.insert);
+    //     statics.length && editor.updateContents({ ops: statics }, "silent");
 
-        for (const op of diff.ops) if (op.insert) {
-            const start = editor.getLength() - 1;
-            await new Promise(res => {
-                let i = 0; const id = setInterval(() => { if (i >= op.insert.length) { clearInterval(id); res(); return; } editor.insertText(start + i, op.insert[i]); i++; }, TYPE_SPEED);
-            });
-        }
-        setSummaryMap(newMap);
-    };
+    //     for (const op of diff.ops) if (op.insert) {
+    //         const start = editor.getLength() - 1;
+    //         await new Promise(res => {
+    //             let i = 0; const id = setInterval(() => { if (i >= op.insert.length) { clearInterval(id); res(); return; } editor.insertText(start + i, op.insert[i]); i++; }, TYPE_SPEED);
+    //         });
+    //     }
+    //     setSummaryMap(newMap);
+    // };
 
     /* next-topic prompt (略) —— 与之前一样 */
 
-    const exportMd = () => {/* …保持不变… */ };
+    const handleSummaryUpdate = async (jsonStr) => {
+        const { summary } = JSON.parse(jsonStr);
+        setStructuredJson(jsonStr);
+        const newMap = new Map(summary.map((x) => [x.id, x]));
+        await applyDeltaDiff(summaryMap, newMap);
+        setSummaryMap(newMap);
+    };
+
+    /* 关键逻辑：Delta diff + 仅动画 insert -------------------------- */
+    // async function applyDeltaDiff(oldMap, newMap) {
+    //     const editor = quillRef.current.getEditor();
+    //     const oldDelta = editor.getContents();
+    //     const newDelta = toDelta(newMap);
+    //     const diff = oldDelta.diff(newDelta);
+
+    //     /** 先把所有非 insert 的变动一次 silent 应用 */
+    //     const staticOps = diff.ops.filter((op) => !op.insert);
+    //     if (staticOps.length) editor.updateContents({ ops: staticOps }, "silent");
+
+    //     /** 对每个 insert（新增或改动）做逐字动画 */
+    //     for (const op of diff.ops) {
+    //         if (op.insert) {
+    //             const start = editor.getLength() - 1;   // 永远在尾部插
+    //             await typewriter(editor, op.insert, start);
+    //         }
+    //     }
+    // }
+    async function applyDeltaDiff(oldMap, newMap) {
+        const editor = quillRef.current.getEditor();
+        const diff = editor.getContents().diff(toDelta(newMap));
+
+        let cursor = 0;        // 光标位置
+        for (const op of diff.ops) {
+            if (op.retain) {
+                cursor += op.retain;                     // 跳过
+            } else if (op.delete) {
+                editor.deleteText(cursor, op.delete, 'silent');
+            } else if (op.insert) {
+                await typewriter(editor, op.insert, cursor); // 在正确位置插入
+                cursor += op.insert.length;
+            }
+        }
+    }
+
+
+    /* 打字动画 ---------------------------------------------------- */
+    function typewriter(editor, str, pos) {
+        return new Promise((res) => {
+            let i = 0;
+            const t = setInterval(() => {
+                if (i >= str.length) {
+                    clearInterval(t);
+                    res();
+                    return;
+                }
+                editor.insertText(pos + i, str[i]);
+                i++;
+            }, TYPE_SPEED);
+        });
+    }
+
+    const exportMd = () => {
+        const md = Array.from(summaryMap.values())
+            .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
+            .map((s) => `${s.id} ${s.title}\n${s.content}\n`)
+            .join("\n");
+        const blob = new Blob([md], { type: "text/markdown" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "meeting_summary.md";
+        a.click();
+    };
 
     /* ----------------- UI ----------------- */
     return (

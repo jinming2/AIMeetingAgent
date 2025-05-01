@@ -64,9 +64,6 @@ speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_re
 speech_config.speech_recognition_language = "en-US"  # Default language
 
 
-# 引入 summary agent
-
-
 # 初始化 Summary Agent
 # summary_graph = build_structured_summary_graph()
 summary_state: MeetingState = {"transcript": "", "structured": None, "memory": ""}
@@ -76,6 +73,9 @@ recognized_transcripts = []
 ppt_service = PPTService()
 speech_generator = SpeechGenerator()
 # next_topic_service = NextTopicService()
+
+transcript_counter = 0
+last_sentence = ""
 
 
 def convert_audio_data(data, sample_rate=16000, channels=1, sample_width=2):
@@ -284,8 +284,23 @@ async def websocket_transcribe(websocket: WebSocket):
 
         # Define callback functions that add messages to the queue
         def recognized_cb(evt):
+            global transcript_counter, last_sentence
+            logger.info("[CB] raw text=%r listening=%s", evt.result.text, is_listening)
             if not is_listening:
                 return
+
+            text = evt.result.text
+            if not text:
+                return
+
+            # --- ① 跳过重复句 ---
+            logger.info(f"{last_sentence}[Debug][recognized_cb] final text: {text!r}")
+            if text == last_sentence:
+                return
+            last_sentence = text
+
+            # --- ② 只用计数器 ---
+            transcript_counter += 1
 
             if evt.result.text:
                 # logger.info(f"[Debug][recognized_cb] final text: {evt.result.text!r}")
@@ -325,7 +340,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 recognized_transcripts.append(evt.result.text)
 
                 # 每 n=10 段生成结构化摘要
-                if len(recognized_transcripts) >= 5:
+                if transcript_counter % 5 == 0:
                     # logger.info(
                     #     "[Batch] Triggering structured summary after 10 transcripts"
                     # )
